@@ -1,0 +1,8 @@
+server/node_modules/
+server/.env
+server/server.out.log
+server/server.err.log
+server/server.pid.txt
+server/storage/*.pptx
+server/storage/*.docx
+*.log

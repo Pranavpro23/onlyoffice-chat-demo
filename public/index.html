@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ONLYOFFICE Chat Demo</title>
+  <script type="text/javascript" src="http://localhost:8080/web-apps/apps/api/documents/api.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            accent: { DEFAULT: '#8b5cf6', hover: '#7c3aed', light: '#a78bfa' },
+          },
+          fontFamily: {
+            mono: ['Consolas', 'Monaco', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    /* Kept as plain CSS rather than Tailwind utilities: these are either
+       small custom keyframes Tailwind's CDN build doesn't ship by default,
+       or a JS-toggled 'active' state (segmented control) where the
+       transition needs to live on the base rule. Everything else on the
+       page uses Tailwind utility classes directly in the markup. */
+    html, body { margin: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    body { display: flex; flex-direction: column; background: #020617; }
+
+    /* --- Keyframes not in Tailwind's default CDN build --- */
+    @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes bubbleIn { from { opacity: 0; transform: translateY(4px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    @keyframes dotBounce { 0%, 80%, 100% { transform: translateY(0); opacity: 0.4; } 40% { transform: translateY(-4px); opacity: 1; } }
+    @keyframes dotPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.55); } 50% { box-shadow: 0 0 0 5px rgba(139, 92, 246, 0); } }
+
+    .animate-fade-slide-in { animation: fadeSlideIn 0.35s ease-out; }
+    .animate-bubble-in { animation: bubbleIn 0.25s ease-out; }
+    .typing-dot { animation: dotBounce 1.2s infinite ease-in-out; }
+    .typing-dot:nth-child(2) { animation-delay: 0.15s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.3s; }
+    .status-dot-pulse { animation: dotPulse 1.6s infinite; }
+
+    /* Segmented control: active/inactive text color, toggled via
+       classList on click (see initEditor). */
+    .mode-btn { color: #cbd5e1; }
+    .mode-btn.active { color: #fff; }
+
+    /* Editor container: whatever element DocsAPI.DocEditor currently owns
+       inside #editor-frame (originally a bare <div>, replaced with a bare
+       <iframe> the instant the editor initializes - it does not preserve
+       the div's id, verified live) must always fill the frame, through
+       every mode-switch teardown/recreate cycle. Explicit height: 100% +
+       flex-grow on every link in the chain (frame and its child) rather
+       than relying on Tailwind's h-full/flex-1 alone, so nothing here can
+       resolve to a stale/fixed pixel size across a destroy+recreate. */
+    #editor-frame { display: flex; flex-grow: 1; height: 100%; }
+    #editor-frame > * { flex-grow: 1; width: 100%; height: 100%; border: none; display: block; }
+  </style>
+</head>
+<body class="text-slate-200">
+  <div id="main-layout" class="flex-1 min-h-0 h-full w-full flex">
+    <div id="editor-col" class="basis-[62%] max-w-[62%] min-w-0 h-full box-border flex p-3 bg-slate-950">
+      <div id="editor-frame" class="flex-1 flex min-w-0 min-h-0 h-full rounded-2xl border border-slate-700/60 shadow-2xl shadow-black/60 ring-1 ring-white/5 overflow-hidden">
+        <div id="editor" class="flex-1 h-full"></div>
+      </div>
+    </div>
+
+    <div id="side-col" class="basis-[38%] max-w-[38%] min-w-0 h-full flex flex-col border-l border-slate-800">
+      <div id="trace" class="basis-1/4 min-h-0 box-border flex flex-col bg-slate-900">
+        <div id="trace-header" class="flex-none flex items-center justify-between px-3.5 py-2.5 border-b border-slate-800">
+          <span class="text-[11px] font-bold tracking-widest uppercase text-slate-400">Live Trace</span>
+          <div id="mode-switch-group" class="relative inline-flex bg-slate-800/80 rounded-full p-0.5 select-none">
+            <span id="mode-switch-indicator" class="absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded-full bg-gradient-to-r from-accent-hover to-accent shadow-md shadow-violet-900/40 transition-transform duration-300 ease-out"></span>
+            <button type="button" class="mode-btn active relative z-10 px-2.5 py-1 text-[10px] font-semibold rounded-full transition-colors duration-300" data-mode="pptx">PPT</button>
+            <button type="button" class="mode-btn relative z-10 px-2.5 py-1 text-[10px] font-semibold rounded-full transition-colors duration-300" data-mode="docx">DOC</button>
+          </div>
+        </div>
+        <div id="trace-log" class="flex-1 overflow-y-auto px-3.5 py-3 text-xs font-mono space-y-2"></div>
+      </div>
+
+      <div id="chat" class="flex-1 min-h-0 box-border flex flex-col bg-slate-950 border-t border-slate-800">
+        <div id="chat-log" class="flex-1 overflow-y-auto px-3.5 py-3 space-y-2.5"></div>
+        <div id="chat-input-row" class="flex-none flex gap-2 p-3 border-t border-slate-800 bg-slate-900/50">
+          <input type="text" id="chat-input" placeholder="Type an instruction..." class="flex-1 min-w-0 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent focus:border-accent transition-shadow">
+          <button id="chat-send" class="flex-none px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm font-medium transition-colors shadow-md shadow-violet-900/40">Send</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="text/javascript">
+    function logMessage(role, text) {
+      const log = document.getElementById('chat-log');
+      const row = document.createElement('div');
+      row.className = 'flex animate-bubble-in ' + (role === 'user' ? 'justify-end' : 'justify-start');
+
+      const bubble = document.createElement('div');
+      bubble.className = role === 'user'
+        ? 'max-w-[85%] rounded-2xl rounded-br-sm bg-gradient-to-br from-accent-hover to-accent text-white px-3.5 py-2 text-sm shadow-md shadow-violet-900/30 whitespace-pre-wrap break-words'
+        : 'max-w-[85%] rounded-2xl rounded-bl-sm bg-slate-800 text-slate-100 border border-slate-700/60 px-3.5 py-2 text-sm shadow-md shadow-black/20 whitespace-pre-wrap break-words';
+      bubble.textContent = text;
+
+      row.appendChild(bubble);
+      log.appendChild(row);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    // Typing/processing indicator: a left-aligned bubble with three
+    // bouncing dots, shown for the whole request lifecycle (from send to
+    // stream completion) rather than a static "loading" label.
+    let typingIndicatorEl = null;
+
+    function showTypingIndicator() {
+      hideTypingIndicator();
+      const log = document.getElementById('chat-log');
+      const row = document.createElement('div');
+      row.className = 'flex justify-start animate-bubble-in';
+      const bubble = document.createElement('div');
+      bubble.className = 'rounded-2xl rounded-bl-sm bg-slate-800 border border-slate-700/60 px-4 py-3 shadow-md shadow-black/20 flex items-center gap-1.5';
+      for (let i = 0; i < 3; i++) {
+        const dot = document.createElement('span');
+        dot.className = 'typing-dot w-2 h-2 rounded-full bg-slate-400';
+        bubble.appendChild(dot);
+      }
+      row.appendChild(bubble);
+      log.appendChild(row);
+      log.scrollTop = log.scrollHeight;
+      typingIndicatorEl = row;
+    }
+
+    function hideTypingIndicator() {
+      if (typingIndicatorEl) {
+        typingIndicatorEl.remove();
+        typingIndicatorEl = null;
+      }
+    }
+
+    // Tracks the dot of whichever trace line currently represents an
+    // in-flight wait (calling_llm / executing), so the NEXT event to arrive
+    // can resolve it - green if that step completed, red if the stream
+    // errored out while it was still pending.
+    let pendingTraceDot = null;
+
+    function clearTrace() {
+      document.getElementById('trace-log').innerHTML = '';
+      pendingTraceDot = null;
+    }
+
+    // Renders one line per SSE step as a plain backend-log entry: a
+    // timestamp, a status dot, and the message - nothing else (no raw JSON,
+    // no code). The llm_response step is deliberately not rendered here
+    // (see sendInstruction) since its payload is a parsed action object,
+    // not a log-line string, and this panel is meant to read like a log
+    // stream a client would recognize, not an internals viewer.
+    function addTraceEntry(event) {
+      const traceLog = document.getElementById('trace-log');
+
+      // The step that was previously pending (calling_llm while waiting on
+      // Claude, or executing while the handler "runs") is resolved by
+      // whatever event just arrived: done if this new event isn't itself an
+      // error, red if the stream errored out while it was still pending.
+      if (pendingTraceDot) {
+        pendingTraceDot.classList.remove('bg-slate-500', 'status-dot-pulse');
+        pendingTraceDot.classList.add(event.step === 'error' ? 'bg-red-500' : 'bg-emerald-500');
+        pendingTraceDot = null;
+      }
+
+      const row = document.createElement('div');
+      row.className = 'flex items-center gap-2 animate-fade-slide-in';
+
+      const time = document.createElement('span');
+      time.className = 'text-slate-600 tabular-nums flex-none';
+      time.textContent = new Date().toLocaleTimeString('en-GB');
+
+      const dot = document.createElement('span');
+      dot.className = 'w-2 h-2 rounded-full flex-none';
+
+      const isWaiting = event.step === 'calling_llm' || event.step === 'executing';
+      if (event.step === 'error') {
+        dot.classList.add('bg-red-500');
+      } else if (isWaiting) {
+        dot.classList.add('bg-slate-500', 'status-dot-pulse');
+        pendingTraceDot = dot;
+      } else {
+        dot.classList.add('bg-emerald-500');
+      }
+
+      const message = document.createElement('span');
+      message.className = 'flex-1 min-w-0 truncate ' + (
+        event.step === 'error' ? 'text-red-300' :
+        event.step === 'done' ? 'text-emerald-300' :
+        event.step === 'executing' ? 'text-accent-light' :
+        'text-slate-400'
+      );
+      message.textContent = event.step === 'error' ? ('Error: ' + event.detail) : event.detail;
+
+      row.appendChild(time);
+      row.appendChild(dot);
+      row.appendChild(message);
+      traceLog.appendChild(row);
+      traceLog.scrollTop = traceLog.scrollHeight;
+    }
+
+    async function sendInstruction() {
+      const input = document.getElementById('chat-input');
+      const text = input.value.trim();
+      if (!text) return;
+
+      logMessage('user', text);
+      input.value = '';
+      clearTrace();
+      showTypingIndicator();
+
+      try {
+        const res = await fetch('http://localhost:4000/api/edit-instruction', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instruction: text, mode: currentMode })
+        });
+
+        // The endpoint streams Server-Sent Events (one JSON object per
+        // "data: ...\n\n" chunk) instead of a single JSON body. Read the
+        // response body as a stream and render each event into the Live
+        // Trace panel the moment it arrives - no buffering until the
+        // stream ends, so the real gap while Claude is thinking is visible.
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          let boundary;
+          while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+            const rawEvent = buffer.slice(0, boundary).trim();
+            buffer = buffer.slice(boundary + 2);
+            if (!rawEvent.startsWith('data:')) continue;
+
+            const event = JSON.parse(rawEvent.slice(5).trim());
+
+            // llm_response carries the parsed action object (not a log-line
+            // string) - it drives execution but isn't rendered as its own
+            // trace line, keeping the panel to clean, readable log entries.
+            if (event.step === 'llm_response') {
+              if (event.detail && event.detail.action) {
+                applyAction(event.detail);
+              }
+            } else {
+              addTraceEntry(event);
+            }
+          }
+        }
+      } catch (err) {
+        addTraceEntry({ step: 'error', detail: String(err) });
+      } finally {
+        hideTypingIndicator();
+      }
+    }
+
+    // callCommand's function is serialized (via toString) and run inside the
+    // editor iframe, so it has no access to the outer JS closure - any values
+    // it needs have to be baked into the function's source as literals.
+    //
+    // Note: this build's shapes expose placeholder info via
+    // shape.GetPlaceholder().GetType() - NOT shape.IsPlaceholder() /
+    // GetPlaceholderType(), which don't exist here (verified live).
+    const PLACEHOLDER_HELPERS = `
+      function phType(shape) {
+        var ph = shape.GetPlaceholder && shape.GetPlaceholder();
+        return ph && typeof ph.GetType === 'function' ? ph.GetType() : null;
+      }
+      function findByType(aShapes, type) {
+        for (var i = 0; i < aShapes.length; i++) {
+          if (phType(aShapes[i]) === type) return aShapes[i];
+        }
+        return null;
+      }
+    `;
+
+    // Run.SetColor takes raw (r, g, b) numbers in this build, NOT an
+    // Api.CreateRGBColor(...) object - verified live: passing a color object
+    // silently no-ops (GetColor().GetHex() stays #000000 after the call),
+    // while SetColor(r, g, b) round-trips correctly.
+    function hexToRgbArgs(hex) {
+      const r = parseInt(hex.slice(0, 2), 16);
+      const g = parseInt(hex.slice(2, 4), 16);
+      const b = parseInt(hex.slice(4, 6), 16);
+      return `${r}, ${g}, ${b}`;
+    }
+
+    // Unlike Run.SetColor, CreateThemeColorScheme's 12-entry array expects
+    // actual Api.CreateRGBColor(...) objects, not raw numbers (verified live).
+    function hexToRgbColorLiteral(hex) {
+      return `Api.CreateRGBColor(${hexToRgbArgs(hex)})`;
+    }
+
+    // Each entry builds the source string passed to `new Function(...)` for
+    // that action - kept as named builders (rather than inlined in a big
+    // if-chain) purely for readability.
+    const PPTX_ACTION_CODE_BUILDERS = {
+      // AddSlide's real signature is (oSlideObject, index) - the reverse of
+      // what it looks like from the method name, and the slide object must
+      // come from Api.CreateSlide() (verified live: AddSlide(index) alone
+      // throws "Cannot read properties of undefined (reading 'Kac')").
+      add_slide: () => `
+          var oPresentation = Api.GetPresentation();
+          var oSlide = Api.CreateSlide();
+          oPresentation.AddSlide(oSlide, oPresentation.GetSlidesCount());
+          return true;
+        `,
+
+      set_title: (action) => `
+          ${PLACEHOLDER_HELPERS}
+          var oSlide = Api.GetPresentation().GetSlideByIndex(${Number(action.slide_index) || 0});
+          var aShapes = oSlide.GetAllShapes();
+          var oShape = findByType(aShapes, "title") || findByType(aShapes, "ctrTitle") || aShapes[0];
+          if (!oShape) return false;
+          var oParagraph = oShape.GetContent().GetElement(0);
+          oParagraph.RemoveAllElements();
+          oParagraph.AddText(${JSON.stringify(String(action.text))});
+          return true;
+        `,
+
+      set_subtitle: (action) => `
+          ${PLACEHOLDER_HELPERS}
+          var oSlide = Api.GetPresentation().GetSlideByIndex(${Number(action.slide_index) || 0});
+          var aShapes = oSlide.GetAllShapes();
+          var oShape = findByType(aShapes, "subTitle") || findByType(aShapes, "subtitle");
+          if (!oShape) return false;
+          var oParagraph = oShape.GetContent().GetElement(0);
+          oParagraph.RemoveAllElements();
+          oParagraph.AddText(${JSON.stringify(String(action.text))});
+          return true;
+        `,
+
+      add_bullet: (action) => `
+          ${PLACEHOLDER_HELPERS}
+          var oSlide = Api.GetPresentation().GetSlideByIndex(${Number(action.slide_index) || 0});
+          var aShapes = oSlide.GetAllShapes();
+          var oBody = findByType(aShapes, "body") || findByType(aShapes, "text");
+          if (!oBody) return false;
+          var oContent = oBody.GetContent();
+
+          // A freshly-templated body placeholder starts with a single
+          // paragraph holding one empty-text run (GetText() === "\\r\\n", not
+          // truly zero elements). If we always Push a new paragraph, that
+          // empty one lingers forever as an invisible "bullet 0" and throws
+          // off every future bullet_index (remove_bullet would target the
+          // wrong line). So: reuse it the first time, only Push afterward.
+          var firstPara = oContent.GetElementsCount() === 1 ? oContent.GetElement(0) : null;
+          var firstParaIsEmpty = firstPara && firstPara.GetText().replace(/[\\r\\n]/g, '') === '';
+          if (firstParaIsEmpty) {
+            firstPara.RemoveAllElements();
+            firstPara.AddText(${JSON.stringify(String(action.text))});
+          } else {
+            var oParagraph = Api.CreateParagraph();
+            oParagraph.AddText(${JSON.stringify(String(action.text))});
+            oContent.Push(oParagraph);
+          }
+          return true;
+        `,
+
+      remove_bullet: (action) => `
+          ${PLACEHOLDER_HELPERS}
+          var oSlide = Api.GetPresentation().GetSlideByIndex(${Number(action.slide_index) || 0});
+          var aShapes = oSlide.GetAllShapes();
+          var oBody = findByType(aShapes, "body") || findByType(aShapes, "text");
+          if (!oBody) return false;
+          var oContent = oBody.GetContent();
+          var idx = ${Number(action.bullet_index) || 0};
+          if (idx < 0 || idx >= oContent.GetElementsCount()) return false;
+          oContent.RemoveElement(idx);
+          return true;
+        `,
+
+      edit_bullet: (action) => `
+          ${PLACEHOLDER_HELPERS}
+          var oSlide = Api.GetPresentation().GetSlideByIndex(${Number(action.slide_index) || 0});
+          var aShapes = oSlide.GetAllShapes();
+          var oBody = findByType(aShapes, "body") || findByType(aShapes, "text");
+          if (!oBody) return false;
+          var oContent = oBody.GetContent();
+          var idx = ${Number(action.bullet_index) || 0};
+          if (idx < 0 || idx >= oContent.GetElementsCount()) return false;
+          var oParagraph = oContent.GetElement(idx);
+          oParagraph.RemoveAllElements();
+          oParagraph.AddText(${JSON.stringify(String(action.text))});
+          return true;
+        `,
+
+      format_text: (action) => {
+        const boldLine = action.bold !== undefined ? `oRun.SetBold(${!!action.bold});` : '';
+        const colorLine = action.color ? `oRun.SetColor(${hexToRgbArgs(action.color)});` : '';
+        return `
+          ${PLACEHOLDER_HELPERS}
+          var oSlide = Api.GetPresentation().GetSlideByIndex(${Number(action.slide_index) || 0});
+          var aShapes = oSlide.GetAllShapes();
+          var oShape = findByType(aShapes, ${JSON.stringify(String(action.target))});
+          if (!oShape) return false;
+          var oParagraph = oShape.GetContent().GetElement(0);
+          if (!oParagraph || oParagraph.GetElementsCount() === 0) return false;
+          // The paragraph can hold more than one run (e.g. a leftover empty
+          // run alongside the actual text run added by set_title/set_subtitle),
+          // so format every run rather than assuming GetElement(0) is the text.
+          var runCount = oParagraph.GetElementsCount();
+          for (var i = 0; i < runCount; i++) {
+            var oRun = oParagraph.GetElement(i);
+            ${boldLine}
+            ${colorLine}
+          }
+          return true;
+        `;
+      },
+
+      // Api.CreateTable's real signature is (rows, cols) - the reverse of
+      // what the name/typical (cols, rows) convention suggests (verified
+      // live: CreateTable(3, 2) produced a table with 2 cells per row).
+      add_table: (action) => `
+          var oSlide = Api.GetPresentation().GetSlideByIndex(${Number(action.slide_index) || 0});
+          var oTable = Api.CreateTable(${Number(action.rows) || 0}, ${Number(action.cols) || 0});
+          var data = ${JSON.stringify(action.data || [])};
+          for (var r = 0; r < data.length; r++) {
+            for (var c = 0; c < data[r].length; c++) {
+              var oCell = oTable.GetRow(r).GetCell(c);
+              var oCellPara = oCell.GetContent().GetElement(0);
+              oCellPara.AddText(data[r][c]);
+            }
+          }
+          oSlide.AddObject(oTable, 100, 100);
+          return true;
+        `,
+
+      add_table_row: (action) => `
+          var oSlide = Api.GetPresentation().GetSlideByIndex(${Number(action.slide_index) || 0});
+          var aTables = oSlide.GetAllTables();
+          if (aTables.length === 0) return false;
+          var oTable = aTables[0];
+          oTable.AddRow();
+          var newIndex = 0;
+          while (oTable.GetRow(newIndex + 1)) newIndex++;
+          var oNewRow = oTable.GetRow(newIndex);
+          var rowData = ${JSON.stringify(action.row_data || [])};
+          for (var c = 0; c < rowData.length && c < oNewRow.GetCellsCount(); c++) {
+            oNewRow.GetCell(c).GetContent().GetElement(0).AddText(rowData[c]);
+          }
+          return true;
+        `,
+
+      format_table: (action) => `
+          var oSlide = Api.GetPresentation().GetSlideByIndex(${Number(action.slide_index) || 0});
+          var aTables = oSlide.GetAllTables();
+          if (aTables.length === 0) return false;
+          var oTable = aTables[0];
+          var oRow = oTable.GetRow(${Number(action.row_index) || 0});
+          if (!oRow) return false;
+          for (var c = 0; c < oRow.GetCellsCount(); c++) {
+            oRow.GetCell(c).SetShd('clear', ${hexToRgbArgs(action.color)});
+          }
+          return true;
+        `,
+
+      // ApplyTheme needs a full Theme object (color + format + font scheme
+      // reconstructed from scratch), which is a lot of surface area to get
+      // right in a build that's already deviated from docs elsewhere. The
+      // master's existing Theme object exposes SetColorScheme directly, so
+      // reuse its existing format/font scheme and just swap the colors
+      // (verified live: this visibly repaints theme-derived elements, e.g.
+      // a table's default header shading, without touching direct
+      // overrides like an explicitly-colored title run).
+      apply_theme: (action) => `
+          var oPresentation = Api.GetPresentation();
+          var aMasters = oPresentation.GetAllSlideMasters();
+          if (aMasters.length === 0) return false;
+          var colorObjs = [${action.colors.map(hexToRgbColorLiteral).join(', ')}];
+          for (var m = 0; m < aMasters.length; m++) {
+            var oTheme = aMasters[m].GetTheme();
+            var oColorScheme = Api.CreateThemeColorScheme(colorObjs, 'Chat theme');
+            oTheme.SetColorScheme(oColorScheme);
+          }
+          return true;
+        `,
+
+      add_textbox: (action) => `
+          var oSlide = Api.GetPresentation().GetSlideByIndex(${Number(action.slide_index) || 0});
+          var oShape = Api.CreateShape('rect', 3000000, 500000, Api.CreateNoFill(), Api.CreateNoFill());
+          var oParagraph = oShape.GetDocContent().GetElement(0);
+          oParagraph.AddText(${JSON.stringify(String(action.text))});
+          oSlide.AddObject(oShape, ${Number(action.x) || 0}, ${Number(action.y) || 0});
+          return true;
+        `,
+
+      delete_slide: (action) => `
+          var oPresentation = Api.GetPresentation();
+          var idx = ${Number(action.slide_index) || 0};
+          if (idx < 0 || idx >= oPresentation.GetSlidesCount()) return false;
+          oPresentation.RemoveSlide(idx);
+          return true;
+        `,
+    };
+
+    // Document Builder API (docx) - verified live against this build, which
+    // deviates from the Presentation Builder API in a few spots:
+    //  - Paragraph.SetStyle() doesn't exist; style lives on
+    //    paragraph.GetParaPr().SetStyle(oStyleObject), and the style object
+    //    itself comes from Api.GetDocument().GetStyle("Heading 1") (a
+    //    string alone is rejected - SetStyle checks `instanceof` a style
+    //    class).
+    //  - Api.CreateTable's signature is (rows, cols), same order as the
+    //    Presentation Builder's (verified: CreateTable(3, 2) produced 2
+    //    cells per row).
+    //  - Paragraph itself exposes SetBold(bool)/SetColor(r,g,b) directly
+    //    (raw numbers, same convention as the pptx Run.SetColor) - no need
+    //    to drop down to individual Runs like the pptx handlers do.
+    const PLACEHOLDER_HELPERS_DOCX = `
+      function isHeadingParagraph(el) {
+        if (!el || !el.GetClassType || el.GetClassType() !== 'paragraph' || typeof el.GetParaPr !== 'function') return false;
+        var oStyle = el.GetParaPr().GetStyle();
+        return !!oStyle && typeof oStyle.GetName === 'function' && oStyle.GetName() === 'Heading 1';
+      }
+      function isEmptyParagraph(el) {
+        return !!el && typeof el.GetText === 'function' && el.GetText().replace(/[\\r\\n]/g, '') === '';
+      }
+    `;
+
+    const DOCX_ACTION_CODE_BUILDERS = {
+      set_heading: (action) => `
+          ${PLACEHOLDER_HELPERS_DOCX}
+          var oDocument = Api.GetDocument();
+          var oHeadingStyle = oDocument.GetStyle('Heading 1');
+          var oFirst = oDocument.GetElementsCount() > 0 ? oDocument.GetElement(0) : null;
+          var oTarget;
+          // Reuse element 0 if it's already a heading (starter.docx's own
+          // heading, or a prior set_heading call) OR if it's an empty
+          // paragraph - otherwise every call would push a new heading and
+          // leave whatever was at the top stranded there forever (the same
+          // class of bug the pptx add_bullet handler had before it reused
+          // the template's leading empty paragraph).
+          if (oFirst && (isHeadingParagraph(oFirst) || isEmptyParagraph(oFirst))) {
+            oTarget = oFirst;
+            oTarget.RemoveAllElements();
+          } else {
+            oTarget = Api.CreateParagraph();
+            oDocument.Push(oTarget);
+          }
+          if (oHeadingStyle) oTarget.GetParaPr().SetStyle(oHeadingStyle);
+          oTarget.AddText(${JSON.stringify(String(action.text))});
+          return true;
+        `,
+
+      add_paragraph: (action) => `
+          var oDocument = Api.GetDocument();
+          var oParagraph = Api.CreateParagraph();
+          oParagraph.AddText(${JSON.stringify(String(action.text))});
+          oDocument.Push(oParagraph);
+          return true;
+        `,
+
+      format_text: (action) => {
+        const boldLine = action.bold !== undefined ? `oTarget.SetBold(${!!action.bold});` : '';
+        const colorLine = action.color ? `oTarget.SetColor(${hexToRgbArgs(action.color)});` : '';
+        const findTarget =
+          action.target === 'heading'
+            ? `
+          ${PLACEHOLDER_HELPERS_DOCX}
+          var oTarget = null;
+          for (var i = 0; i < oDocument.GetElementsCount(); i++) {
+            if (isHeadingParagraph(oDocument.GetElement(i))) { oTarget = oDocument.GetElement(i); break; }
+          }
+          if (!oTarget && oDocument.GetElementsCount() > 0) oTarget = oDocument.GetElement(0);
+        `
+            : `
+          var oTarget = null;
+          for (var i = oDocument.GetElementsCount() - 1; i >= 0; i--) {
+            var el = oDocument.GetElement(i);
+            if (el.GetClassType && el.GetClassType() === 'paragraph') { oTarget = el; break; }
+          }
+        `;
+        return `
+          var oDocument = Api.GetDocument();
+          ${findTarget}
+          if (!oTarget) return false;
+          ${boldLine}
+          ${colorLine}
+          return true;
+        `;
+      },
+
+      add_table: (action) => `
+          var oDocument = Api.GetDocument();
+          var oTable = Api.CreateTable(${Number(action.rows) || 0}, ${Number(action.cols) || 0});
+          var data = ${JSON.stringify(action.data || [])};
+          for (var r = 0; r < data.length; r++) {
+            for (var c = 0; c < data[r].length; c++) {
+              var oCell = oTable.GetRow(r).GetCell(c);
+              var oCellPara = oCell.GetContent().GetElement(0);
+              oCellPara.AddText(data[r][c]);
+            }
+          }
+          oDocument.Push(oTable);
+          return true;
+        `,
+    };
+
+    const MODE_ACTION_BUILDERS = {
+      pptx: PPTX_ACTION_CODE_BUILDERS,
+      docx: DOCX_ACTION_CODE_BUILDERS,
+    };
+
+    function buildCommandFunction(action) {
+      const builders = MODE_ACTION_BUILDERS[currentMode] || PPTX_ACTION_CODE_BUILDERS;
+      const builder = builders[action.action];
+      if (!builder) return null;
+      return new Function(builder(action));
+    }
+
+    function describeAction(action) {
+      switch (action.action) {
+        case 'add_slide': return 'added a slide';
+        case 'set_title': return 'set title to "' + action.text + '"';
+        case 'set_subtitle': return 'set subtitle to "' + action.text + '"';
+        case 'add_bullet': return 'added bullet "' + action.text + '"';
+        case 'remove_bullet': return 'removed bullet ' + action.bullet_index;
+        case 'format_text': return 'formatted "' + action.target + '"';
+        case 'add_table': return 'added a ' + action.rows + 'x' + action.cols + ' table';
+        case 'add_table_row': return 'added table row [' + action.row_data.join(', ') + ']';
+        case 'format_table': return 'colored row ' + action.row_index + ' of the table';
+        case 'apply_theme': return 'applied a new color theme';
+        case 'edit_bullet': return 'changed bullet ' + action.bullet_index + ' to "' + action.text + '"';
+        case 'add_textbox': return 'added a text box "' + action.text + '"';
+        case 'delete_slide': return 'deleted slide ' + action.slide_index;
+        default: return 'applied ' + action.action;
+      }
+    }
+
+    function applyAction(action) {
+      if (!window.connector) {
+        logMessage('system', 'Error: connector not ready yet');
+        return;
+      }
+
+      const command = buildCommandFunction(action);
+      if (!command) {
+        logMessage('system', 'Error: unknown action "' + action.action + '"');
+        return;
+      }
+
+      window.connector.callCommand(command, function (applied) {
+        if (!applied) {
+          logMessage('system', 'Not applied: no matching shape/slide for "' + action.action + '"');
+          return;
+        }
+        logMessage('system', 'Applied: ' + describeAction(action));
+      });
+    }
+
+    document.getElementById('chat-send').addEventListener('click', sendInstruction);
+    document.getElementById('chat-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendInstruction();
+    });
+
+    // Per-mode file config. document.key is generated fresh on every
+    // initEditor call (mode + timestamp) rather than a fixed string -
+    // ONLYOFFICE's docservice keeps a server-side co-editing session keyed
+    // on that string and keeps re-applying its accumulated edit history on
+    // reload, so a fixed key across repeated demo runs caused stale content
+    // to resurface (verified live, in earlier debugging of this same app).
+    // A fresh key per (re)init sidesteps that entirely.
+    const MODE_FILES = {
+      pptx: {
+        url: 'http://host.docker.internal:4000/files/starter.pptx',
+        fileType: 'pptx',
+        documentType: 'slide',
+        title: 'starter.pptx',
+      },
+      docx: {
+        url: 'http://host.docker.internal:4000/files/starter.docx',
+        fileType: 'docx',
+        documentType: 'text',
+        title: 'starter.docx',
+      },
+    };
+
+    let docEditor = null;
+    let currentMode = 'pptx';
+
+    function initEditor(mode) {
+      currentMode = mode;
+      const fileConfig = MODE_FILES[mode];
+
+      // Tear down the previous instance (iframe + its internal state)
+      // before creating a new one, so switching modes never leaves two
+      // editors attached to #editor or two connectors alive at once.
+      if (docEditor && typeof docEditor.destroyEditor === 'function') {
+        docEditor.destroyEditor();
+      }
+      docEditor = null;
+      window.connector = null;
+
+      document.getElementById('chat-log').innerHTML = '';
+      clearTrace();
+
+      document.querySelectorAll('.mode-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.mode === mode);
+      });
+      const modeIndicator = document.getElementById('mode-switch-indicator');
+      if (modeIndicator) {
+        modeIndicator.style.transform = mode === 'docx' ? 'translateX(100%)' : 'translateX(0)';
+      }
+
+      const config = {
+        document: {
+          url: fileConfig.url,
+          fileType: fileConfig.fileType,
+          title: fileConfig.title,
+          key: mode + '-' + Date.now()
+        },
+        documentType: fileConfig.documentType,
+        editorConfig: {
+          callbackUrl: "http://host.docker.internal:4000/callback",
+          user: { id: "demo-user", name: "Demo User" },
+          customization: {
+            anonymous: { request: false, label: "" }
+          }
+        },
+        events: {
+          onDocumentReady: function () {
+            window.connector = docEditor.createConnector();
+            logMessage('system', 'Editor ready (' + mode + '), connector created.');
+          }
+        }
+      };
+
+      docEditor = new DocsAPI.DocEditor("editor", config);
+    }
+
+    document.querySelectorAll('.mode-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.mode === currentMode) return;
+        initEditor(btn.dataset.mode);
+      });
+    });
+
+    initEditor('pptx');
+  </script>
+</body>
+</html>
