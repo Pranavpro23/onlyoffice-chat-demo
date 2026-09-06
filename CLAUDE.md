@@ -94,6 +94,14 @@ consistent.
 
 ## Known rough edges
 
+- **Requires Developer Edition, not Community Edition.**
+  `connector.callCommand()` needs `docEditor.createConnector()`, which
+  Community Edition's `api.js` does not ship at all (not a version gate —
+  the string is simply absent). Community Edition will leave
+  `window.connector` undefined forever, surfacing as "connector not ready
+  yet" on every instruction with no amount of waiting fixing it. Always
+  run `onlyoffice/documentserver-de` (see README setup step 1). This image
+  is public — no Docker Hub login or license file needed for dev/demo use.
 - Mode-switching (the PPTX/DOCX pill) occasionally serves stale cached
   document content right after the underlying file on disk was
   regenerated — a full page reload of `localhost:4000` reliably fixes it.

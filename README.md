@@ -53,12 +53,24 @@ full list per mode). The browser is what actually calls the ONLYOFFICE API.
 
 ### 1. Start ONLYOFFICE Document Server
 
+This demo requires the **Developer Edition** image, not Community Edition.
+`connector.callCommand()` — the mechanism this whole demo runs on — needs
+`docEditor.createConnector()`, which only ships in Developer/Enterprise
+Edition. Community Edition's `api.js` doesn't have it at all, so anything
+built against it will fail with `window.connector` staying permanently
+undefined ("connector not ready" no matter how long you wait).
+
 ```bash
 docker run -i -t -d -p 8080:80 --restart=always \
   -e JWT_ENABLED=false \
   -e ALLOW_PRIVATE_IP_ADDRESS=true \
-  onlyoffice/documentserver
+  onlyoffice/documentserver-de
 ```
+
+`onlyoffice/documentserver-de` is a public image — a plain anonymous pull
+works, no Docker Hub login and no license file needed. Developer Edition
+is free to run for dev/demo purposes with the full Automation/Builder API
+available; it's just not licensed for production deployment.
 
 Give it a minute to boot, then confirm it's up by opening
 `http://localhost:8080` — you should see the ONLYOFFICE welcome page.
@@ -156,6 +168,19 @@ onlyoffice-chat-demo/
 - **Editor never loads / blank iframe**: confirm `http://localhost:8080`
   loads the ONLYOFFICE welcome page first. If it doesn't, the Document
   Server container isn't up yet, or Docker itself isn't running.
+- **Chat instructions permanently fail with "connector not ready yet"**,
+  no matter how long you wait after the page loads: you're almost
+  certainly running Community Edition (`onlyoffice/documentserver`)
+  instead of Developer Edition (`onlyoffice/documentserver-de`).
+  Community Edition's `api.js` has no `createConnector` at all, so
+  `window.connector` never gets set — this isn't a timing issue and
+  waiting longer won't fix it. Check which image is actually running with
+  `docker ps`, and if you see `onlyoffice/documentserver` without the
+  `-de` suffix, stop it and start the Developer Edition image instead (see
+  Setup step 1). If you *are* on `-de` and still see this on a single
+  attempt, it's more likely an ordinary race — reload the page and wait
+  for the "Editor ready, connector created" line in Live Trace before
+  typing.
 - **Docker Desktop won't start on Windows** (engine crashes referencing a
   `.sock` file "cannot be accessed by the system"): kill any leftover
   Docker processes, run `wsl --shutdown`, then relaunch Docker Desktop. If
